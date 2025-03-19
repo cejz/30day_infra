@@ -275,4 +275,142 @@ ncu source page：给定你的bounding 类型，应该关注那些列？
 ![alt text](image-19.png)
 
 # 延迟隐藏 / 增大指令吞吐
-TODO
+
+latency bound的程序，大多数时间花费在等待指令完成上，硬件资源并没有充分利用；需要更多in flight的指令来隐藏指令延迟以及增大硬件的使用率；发出更多的指令；但是busy也不一定总是有用
+
+stalling的原因：
+
++ wait：等待一个编译期已知延迟的指令
++ scoreboard: 等待一个运行期确定延迟的指令
+    + long SB -- 通常是global memory
+    + short SB -- 通常是shared memory
++ throttle： 等待硬件资源有空闲的时候
++ branch resolving：等待branch / PC bookkeeping
++ barrier: 等待其他线程sync
+
+![alt text](image-21.png)
+
+stall 避免策略：
+
+register/ software pipeline：必须破坏register 的依赖关系
+
+```cpp
+// without pipeline
+auto result = 0;
+for (...) 
+    auto working_set = load(...)
+    // stalling to load
+    work_set_compoute()
+    // compute lots with working_set
+    result += working_set
+
+// w pipeline
+auto result = 0;
+auto prefetched = load(...)
+
+for (...)
+    auto working_set = prefetched
+    prefetched = load(...)
+
+    working_set.compute()
+
+    result += working_set
+```
+可以使用一些高级的api：`__pipeline_memcpy_async` `__pipeline_commit()` etc.
+
+![alt text](image-22.png)
+
+barriers: threads必须停下来等待其他线程move的位置；可以通过内存进行同步操作
+
+__syncthreads(): 同步整个线程块，要求被块中所有线程调用；不能将其放入conditional scope中；否则将有UB
+
+协作组同步：同步由user定义的协作组
+![alt text](image-23.png)
+
+延迟隐藏：增加in-flight的指令数
+
+两种方式：
+
++ 改善指令级并行（ILP）：每个线程有更多独立的计算
++ 改善occupacy，即线程级并行（TLP）：给定HW资源的限制下，描述有多少warps可以并发地执行；更多的活跃warps -> 更多的in-flight的指令
+
+![alt text](image-25.png)
+
+![alt text](image-24.png)
+
+stalling的底线：
+
+1. 如果SM或者内存资源是busy的，不需要担心stalls或是未使用的发射slots
+2. 否则，你是layency bound的，给硬件提供更多的并发工作
+
+    + 更频繁地发射
+    + 更不频繁的stall
+    + 在stall时让自己更忙
+    + 减少stall的持续时间，例如使用低延迟的指令
+
+occupacy
+
+存在一个可以在SM上的最大warps 数量：
+
++ device：依赖GPU的计算能力
++ achievable：依赖kernel实现和编译器
++ achieved：很大程度上依赖grid size或者workload的行为，
+
+$$occupacy = \frac {achievable}{device}$$
+
+achivable的限制因素：
+
++ SM资源的分配：
+    + 例如 shared memory和registers必须在线程级别上划分
+    + block size
++ 其他的硬件因素：
+    + 比如 每个SM的最大blocks数，每个SM的最大warps数
+
+![alt text](image-26.png)
+
+看这一个例子，我们首先可以从右图看出每个block的资源需求，share memory需要70KB，regs需要30KB；而活跃的warps数量受到硬件资源的限制，这里一个SM只有164KB的share memory，即最多只能在SM上分配两个线程块
+
+我们可以通过两种方式增加occupacy：
+
++ 每个block使用更少的share memory
++ 将block size减为3个warps；这时需要的share memory资源为52.5KB；那么可以分配3个线程块；此时有9个warps活跃
+
+occupacy的限制因素：
+
++ register的使用：使用 `--ptxas-options=-v` 来编译，报告每个线程的register
++ 每个线程的最大数量可以手动设置：在编译期，可以以每个文件为基础，使用nvcc的 `--maxrregcount` flag；或者在每个kernel中使用 `__launch_bounds__` 或者 `__maxnreg__`
++ hopper每个SM有65536个register：以256 registers的固定倍数进行分配; 例如 kernel每个线程使用63个registers，那么每个warps使用32*63 = 2016 -> 必须是256的倍数 -> 2048，那么每个SM的活跃warps数量为 65536 / 2048 = 32个，occupacy = 32 / 64 = 50 %
+
+如果超出了内存限制，那么会spill到local memory中，local memory是线程私有的存储空间，位于设备内存上，可以被L1和L2 cache；注意受限的local memory使用对性能是有利的
+
+![alt text](image-27.png)
+
+减少register pressure的tips：
+
++ `__forceinline__` 可以避免函数调用以及ABI的开销；但需注意，内联在很多地方调用的长functions会引起指令cache的抖动
++ `#pragama unroll`：loop unrolling可以减少flow control的开销但可能增加register pressure并引起指令cache的抖动; factors 需要tune
++ 尽可能避免64-bit的类型，因为它会消耗两个寄存器
++ kernel分裂可以减少register 的使用并改善occupacy
+
+occupacy的限制因素： thread block size
+
++ block size是warp size的倍数；即使不是，硬件也会round up
++ 每个block的最大size是1024
++ 每个SM可以有最多64个warps，32个blocks以及2048的线程（Hopper）
+
+![alt text](image-28.png)
+
+我需要多大的occupacy？
+
+一个原则是尝试最大化occupacy；但是一些算法可能在low occupacy的时候运行地更好；更多的寄存器和share memory可以允许更高的数据重用。。。
+
+![alt text](image-29.png)
+
+# 减少指令数量 和 让吞吐有用
+
+
+
+# Tensor core summary
+![alt text](image-20.png)
+
+推荐使用cutlass 来获得更好的性能
