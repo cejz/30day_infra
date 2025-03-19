@@ -408,6 +408,25 @@ occupacy的限制因素： thread block size
 
 # 减少指令数量 和 让吞吐有用
 
+数学运算的cost层级，尽可能使用轻量级的tool：
+
+trig / sqrt > div mod (使用constexpr更好) > multiply add subtract > fma
+
+只使用应用所需要的精度，注意避免隐式的double cast；确保使用快速math 优化 `--use_fast_math`
+
+代数优化： 使用模板参数对于编译期已知的变量来说
+
+注意无符号的溢出不是UB，意味着编译可能需要额外的指令处理这种情况；所以在loop中尽量使用 有符号整数 能生成更高效的代码
+
+确保所有的字面量都是正确的精度避免不必要的conversion
+
+更想要更快更专用的math func
+
+检查表达式是否可以重构为更少的指令
+
+尽可能使用 fused multiply add
+
+打破存在依赖的指令chain
 
 
 # Tensor core summary
